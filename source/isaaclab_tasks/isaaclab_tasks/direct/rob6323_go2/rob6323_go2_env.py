@@ -105,7 +105,11 @@ class Rob6323Go2Env(DirectRLEnv):
 
     def _setup_scene(self):
         self.robot = Articulation(self.cfg.robot_cfg)
+        self.scene.articulations["robot"] = self.robot
+
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
+        self.scene.sensors["contact_sensor"] = self._contact_sensor
+
         # add ground plane
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -115,8 +119,6 @@ class Rob6323Go2Env(DirectRLEnv):
         # we need to explicitly filter collisions for CPU simulation
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[])
-        # add articulation to scene
-        self.scene.articulations["robot"] = self.robot
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -223,7 +225,6 @@ class Rob6323Go2Env(DirectRLEnv):
         rew_feet_clearance = torch.sum(rew_foot_clearance, dim=1)
 
         foot_forces = torch.norm(self._contact_sensor.data.net_forces_w[:, self._feet_ids_sensor, :], dim=-1)
-        print(foot_forces)
         desired_contact = self.desired_contact_states
         rew_tracking_contacts_shaped_force = torch.zeros(self.num_envs, device=self.device)
 
