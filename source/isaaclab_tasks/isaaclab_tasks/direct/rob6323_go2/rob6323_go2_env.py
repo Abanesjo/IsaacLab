@@ -109,7 +109,6 @@ class Rob6323Go2Env(DirectRLEnv):
 
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-
         # add ground plane
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -119,6 +118,8 @@ class Rob6323Go2Env(DirectRLEnv):
         # we need to explicitly filter collisions for CPU simulation
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[])
+        # add articulation to scene
+        self.scene.articulations["robot"] = self.robot
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -184,15 +185,6 @@ class Rob6323Go2Env(DirectRLEnv):
             torch.square(self._actions - 2 * self.last_actions[:,:,0] + self.last_actions[:,:,1]), dim=1
         ) * (self.cfg.action_scale ** 2)
 
-        self.last_actions = torch.roll(self.last_actions, 1, 2)
-        self.last_actions[:, :, 0] = self._actions[:]
-
-        #part4: gait shaping
-        self._step_contact_targets()
-        rew_raibert_heuristic = self._reward_raibert_heuristic()
-        
-        #part5: refining rewards
-
         # penalize non-vertical orientation (projected gravity on xy plane). Gravity should be upright thus gravity must project onto only z, so we penalize sum of squares onto x and y components of projected_gravity_b
         rew_orient = torch.sum(
             torch.square(self.robot.data.projected_gravity_b[:, :2]),
@@ -218,8 +210,15 @@ class Rob6323Go2Env(DirectRLEnv):
             dim=1
         )
 
-        phases = 1 - torch.abs(1.0 - torch.clip((self.foot_indices * 2.0) - 1.0, 0.0, 1.0) * 2.0)
-        foot_height = (self.foot_positions_w[:,:,2]).view(self.num_envs, -1)
+
+        self.last_actions = torch.roll(self.last_actions, 1, 2)
+        self.last_actions[:, :, 0] = self._actions[:]
+
+        #part4: gait shaping
+        self._step_contact_targets()
+
+        phases = 1 - torch.abs(1.0 - torch.clamp((self.foot_indices * 2.0) - 1.0, 0.0, 1.0) * 2.0)
+        foot_height = self.foot_positions_w[:, :, 2]
         target_height = 0.08 * phases + 0.02
         rew_foot_clearance = torch.square(target_height - foot_height) * (1 - self.desired_contact_states)
         rew_feet_clearance = torch.sum(rew_foot_clearance, dim=1)
@@ -227,13 +226,12 @@ class Rob6323Go2Env(DirectRLEnv):
         foot_forces = torch.norm(self._contact_sensor.data.net_forces_w[:, self._feet_ids_sensor, :], dim=-1)
         desired_contact = self.desired_contact_states
         rew_tracking_contacts_shaped_force = torch.zeros(self.num_envs, device=self.device)
-
         for i in range(4):
             rew_tracking_contacts_shaped_force += - (1 - desired_contact[:, i]) * (
                         1 - torch.exp(-1 * foot_forces[:, i] ** 2 / 100.))
         rew_tracking_contacts_shaped_force = rew_tracking_contacts_shaped_force / 4
 
-        
+        rew_raibert_heuristic = self._reward_raibert_heuristic()
 
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale,
